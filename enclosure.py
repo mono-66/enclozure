@@ -51,7 +51,7 @@ class Enclosure:
     ledge_height: float = 0.6      # ridge height (left fixed; groove depth follows compression)
 
     # ---- corner screw posts --------------------------------------------
-    outer_pillar_hole: float = 4.0              # threaded-insert hole (base)
+    outer_pillar_hole: float = 4.4              # threaded-insert hole (base)
     outer_pillar_lid_clearance_hole: float = 3.6  # screw clearance (lid)
 
     # ---- M5 wall-mount flange (opt-in) ---------------------------------
