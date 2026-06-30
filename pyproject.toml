@@ -15,3 +15,5 @@ enclosure = "enclosure:main"
 
 [tool.uv]
 package = false
+constraint-dependencies = [
+    "vtk>=9.3,<9.4; python_version=='3.12'"]

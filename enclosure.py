@@ -71,6 +71,10 @@ class Enclosure:
     pcb_edge_clearance: float = 1.0     # PCB outline clearance inside the cavity wall
     m3_clearance: float = 3.2           # M3 clearance hole in the PCB
 
+    # ---- PCB custom standoff positions (optional) -----------------------
+    # List of (x, y) positions in mm from centre. If set, overrides auto placement.
+    pcb_custom_points: list = None
+
     # ---- misc -----------------------------------------------------------
     assembly_gap: float = 0.0
 
@@ -129,6 +133,18 @@ class Enclosure:
         if getattr(self, "_cw", None) is None:
             self._cw = self.seal_centreline().reset().faces().val().outerWire()
         return self._cw
+
+    @property
+    def oring_count(self) -> int:
+        """How many separate o-ring seals the box needs: one continuous cord
+        per closed seal loop (the plus/cross seal is a single loop, so 1)."""
+        return len(self.seal_centreline().reset().faces().vals())
+
+    @property
+    def oring_length(self) -> float:
+        """Cord length to cut for each o-ring: the perimeter of the seal
+        centreline the cord cross-section is centred on."""
+        return self.centre_wire().Length()
 
     def cross_prism(self, half_width: float, height: float) -> cq.Workplane:
         """Prism whose footprint is the centreline offset sideways by half_width
@@ -235,8 +251,12 @@ class Enclosure:
         """Standoff centres on the diagonals, the post edge held
         pcb_wall_clearance from the inner wall. The cavity corners are filleted,
         so the position is solved numerically against the real wall. Four on big
-        boxes, dropping to a diagonal pair, then a single central post."""
+        boxes, dropping to a diagonal pair, then a single central post.
+        If pcb_custom_points is set, those (x, y) positions are used directly."""
         if getattr(self, "_pts", None) is not None:
+            return self._pts
+        if self.pcb_custom_points is not None:
+            self._pts = list(self.pcb_custom_points)
             return self._pts
 
         Rpp = self.pcb_pillar_dia / 2
@@ -394,6 +414,7 @@ class Enclosure:
             f"  o-ring cord          : {self.oring_notional:g} mm @ {self.oring_compression * 100:g}% compression",
             f"  ridge / groove depth : {self.ledge_height:g} / {self.lid_groove_depth:g} mm",
             f"  o-ring centre radius : {self.oring_centre_radius:g} mm",
+            f"  o-ring seals needed  : {self.oring_count} x {self.oring_length:g} mm cord",
             f"  PCB standoffs        : {len(pts)} (M3 self-tap pilot {self.pcb_screw_hole:g}, "
             f"pillar dia {self.pcb_pillar_dia:g}, height {self.pcb_pillar_height:g})",
             f"  PCB hole spacing     : {sx} x {sy} mm",
@@ -463,13 +484,23 @@ def main(argv=None):
     p.add_argument("--flange", action="store_true", help="add the M5 wall-mount flange")
     p.add_argument("--no-pcb-mounts", dest="pcb_mounts", action="store_false",
                    help="omit the PCB standoffs (on by default)")
+    p.add_argument("--pcb-pos", type=float, nargs=2, metavar=("X", "Y"),
+                   help="standoff distance from centre in mm, e.g. --pcb-pos 30 25; "
+                        "mirrors automatically to all four corners")
     p.add_argument("-o", "--outdir", default=".", help="output directory (default: CWD)")
     a = p.parse_args(argv)
+
+    # Mirror a single position to all four corners if --pcb-pos was supplied
+    custom_points = None
+    if a.pcb_pos is not None:
+        px, py = a.pcb_pos
+        custom_points = [(px, py), (-px, py), (px, -py), (-px, -py)]
 
     enc = Enclosure(
         width=a.width, breadth=a.breadth,
         lid_height=a.lid_height, base_height=a.base_height,
         flange=a.flange, pcb_mounts=a.pcb_mounts,
+        pcb_custom_points=custom_points,
     )
     path = enc.export_zip(a.outdir)
     if enc.flange:
