@@ -35,6 +35,67 @@ def _convex_hull(points):
     return lower[:-1] + upper[:-1]
 
 
+# ---------------------------------------------------------------------------
+# Known board mounting-hole patterns
+# ---------------------------------------------------------------------------
+# Each entry gives the board outline size and the mounting-hole coordinates
+# measured from the board's bottom-left corner (mm), plus the screw it takes.
+# `screw` is the self-tapper pilot diameter for the standoff; `clearance` is the
+# hole left in the exported PCB outline. `board_points()` re-references the holes
+# to the board-outline centre so the board sits centred in the enclosure.
+BOARDS = {
+    # --- Arduino (M3) -----------------------------------------------------
+    "arduino-uno": {
+        "desc": "Arduino Uno R3 / Leonardo (68.6 x 53.3 mm)",
+        "size": (68.58, 53.34),
+        "holes": [(15.24, 2.54), (15.24, 50.8), (66.04, 17.78), (66.04, 45.72)],
+        "screw": 2.5, "clearance": 3.2,
+    },
+    "arduino-mega": {
+        "desc": "Arduino Mega 2560 / Due (101.6 x 53.3 mm)",
+        "size": (101.6, 53.34),
+        "holes": [(15.24, 2.54), (15.24, 50.8), (66.04, 17.78), (66.04, 45.72),
+                  (90.17, 2.54), (96.52, 50.8)],
+        "screw": 2.5, "clearance": 3.2,
+    },
+    # --- Raspberry Pi (M2.5) ---------------------------------------------
+    "rpi-b": {
+        "desc": "Raspberry Pi B+/2/3/4/5 full-size (85 x 56 mm)",
+        "size": (85.0, 56.0),
+        "holes": [(3.5, 3.5), (3.5, 52.5), (61.5, 3.5), (61.5, 52.5)],
+        "screw": 2.1, "clearance": 2.7,
+    },
+    "rpi-a": {
+        "desc": "Raspberry Pi 3 A+ (65 x 56 mm)",
+        "size": (65.0, 56.0),
+        "holes": [(3.5, 3.5), (3.5, 52.5), (61.5, 3.5), (61.5, 52.5)],
+        "screw": 2.1, "clearance": 2.7,
+    },
+    "rpi-zero": {
+        "desc": "Raspberry Pi Zero / Zero W / Zero 2 W (65 x 30 mm)",
+        "size": (65.0, 30.0),
+        "holes": [(3.5, 3.5), (3.5, 26.5), (61.5, 3.5), (61.5, 26.5)],
+        "screw": 2.1, "clearance": 2.7,
+    },
+    # --- Raspberry Pi Pico (M2) ------------------------------------------
+    "rpi-pico": {
+        "desc": "Raspberry Pi Pico / Pico W (51 x 21 mm)",
+        "size": (51.0, 21.0),
+        "holes": [(2.0, 4.8), (2.0, 16.2), (49.0, 4.8), (49.0, 16.2)],
+        "screw": 1.7, "clearance": 2.4,
+    },
+}
+
+
+def board_points(name, offset=(0.0, 0.0)):
+    """Mounting-hole (x, y) for a named board, referenced to the board-outline
+    centre (so the board sits centred in the box). `offset` shifts the pattern."""
+    b = BOARDS[name]
+    cx, cy = b["size"][0] / 2.0, b["size"][1] / 2.0
+    ox, oy = offset
+    return [(x - cx + ox, y - cy + oy) for (x, y) in b["holes"]]
+
+
 @dataclass
 class Enclosure:
     # ---- overall size (the four headline parameters) --------------------
@@ -53,6 +114,21 @@ class Enclosure:
     # ---- corner screw posts --------------------------------------------
     outer_pillar_hole: float = 4.4              # threaded-insert hole (base)
     outer_pillar_lid_clearance_hole: float = 3.6  # screw clearance (lid)
+
+    # Outer corner rounding. None -> the minimum that still buries the corner
+    # screw post in the wall (the old behaviour). Larger values give a more
+    # rounded box; the screw posts slide inward along the diagonal to stay
+    # nestled in the corner. Clamped to a safe range by `corner_r`.
+    corner_radius: float = None
+    # Seal routing. "round": one clean rounded-rectangle seal; the corner
+    # posts live in the solid pocket OUTSIDE the seal corner arc (drawing
+    # style). "cross": legacy plus/cross path that detours inboard of each
+    # post (the old inward hook).
+    seal_style: str = "round"
+    # Seal corner radius override, in mm. None -> automatic: for "round" the
+    # smallest radius whose corner pocket fits the screw post; for "cross" a
+    # smooth 4.5. Clamped to buildable bounds either way.
+    seal_corner_radius: float = None
 
     # ---- M5 wall-mount flange (opt-in) ---------------------------------
     flange: bool = False
@@ -74,6 +150,7 @@ class Enclosure:
     # ---- PCB custom standoff positions (optional) -----------------------
     # List of (x, y) positions in mm from centre. If set, overrides auto placement.
     pcb_custom_points: list = None
+    pcb_board: str = None  # name of a BOARDS preset, for reporting only
 
     # ---- misc -----------------------------------------------------------
     assembly_gap: float = 0.0
@@ -101,23 +178,77 @@ class Enclosure:
         return self.outer_pillar_hole + 2 * self.outer_wall
 
     @property
+    def corner_r(self) -> float:
+        """Outer-wall corner fillet radius, clamped to a buildable range.
+
+        Floor: outer_pillar_dia/2, the tightest corner that still fully wraps a
+        screw post sitting hard in the corner. Ceiling: just under half the
+        short side, so opposite corner arcs never overlap."""
+        floor = self.outer_pillar_dia / 2
+        ceil = min(self.width, self.breadth) / 2 - self.outer_wall
+        # Default: 10% of the short side -> a clearly rounded box that scales
+        # with size. The legacy cross seal keeps its original tight corner
+        # (its plus/cross path was drawn for posts hard in the corner).
+        if self.seal_style == "cross":
+            default = floor
+        else:
+            default = max(floor, 0.10 * min(self.width, self.breadth))
+        r = default if self.corner_radius is None else self.corner_radius
+        return max(floor, min(r, ceil))
+
+    @property
+    def seal_inset(self) -> float:
+        """Seal centreline distance in from the outer face."""
+        return self.outer_wall + self.oring_notch / 2
+
+    @property
+    def _round_seal_min_radius(self) -> float:
+        # Everything lives on the corner diagonal. The seal corner arc's
+        # nearest point to the corner sits at depth (inset + rs)*sqrt2 - rs;
+        # the post centre (tangent inside the outer arc) at R*(sqrt2-1) +
+        # post_r. Their gap must cover half the o-ring notch, a web of
+        # material, and the screw-hole radius. Solve for rs.
+        s2 = math.sqrt(2)
+        post_r = self.outer_pillar_dia / 2
+        clr = self.oring_notch / 2 + self.outer_pillar_hole / 2 + 1.2
+        return (clr + post_r + self.corner_r * (s2 - 1) - self.seal_inset * s2) / (s2 - 1)
+
+    @property
     def oring_centre_radius(self) -> float:
-        # The seal cross has a convex arm tip a short "shoulder" away from a
-        # concave armpit; two equal fillets need 2*r of straight edge between
-        # them, so r <= shoulder/2 (with a small margin OCC likes).
-        seal_shoulder = self.outer_pillar_dia - self.ledge_from_outer
-        r = min(4.0, seal_shoulder / 2.0 - 0.1)
-        assert r > 0.0, "shoulder too small for any fillet"
-        return r
+        """Corner radius of the seal path (both styles), clamped buildable."""
+        if self.seal_style == "round":
+            floor = self._round_seal_min_radius
+            ceil = min(self.width, self.breadth) / 2 - self.seal_inset - 1.0
+            assert floor <= ceil, (
+                f"box too small for a round seal: needs corner radius {floor:.1f} "
+                f"but only {ceil:.1f} fits; use seal_style='cross' or a bigger box")
+            r = floor if self.seal_corner_radius is None else self.seal_corner_radius
+            return max(floor, min(r, ceil))
+        # cross: OCC builds the plus/cross reliably up to ~5 mm (fails by 6).
+        r = 4.5 if self.seal_corner_radius is None else self.seal_corner_radius
+        return max(0.5, min(r, 5.0))
 
     # =====================================================================
     # Seal geometry
     # =====================================================================
     def sketch_outside(self) -> cq.Sketch:
-        return cq.Sketch().rect(self.width, self.breadth).vertices().fillet(self.outer_pillar_dia / 2)
+        return cq.Sketch().rect(self.width, self.breadth).vertices().fillet(self.corner_r)
 
     def seal_centreline(self) -> cq.Sketch:
-        """Filleted plus/cross seal centreline, routed inside the corner posts."""
+        """Seal path centreline.
+
+        round: one clean rounded rectangle a constant seal_inset from the wall;
+        the generous corner radius leaves a solid pocket at each corner, outside
+        the sealed volume, that the screw post sits in.
+        cross: legacy plus/cross routed inboard of the corner posts."""
+        if self.seal_style == "round":
+            i2 = 2 * self.seal_inset
+            return (
+                cq.Sketch()
+                .rect(self.width - i2, self.breadth - i2)
+                .vertices()
+                .fillet(self.oring_centre_radius)
+            )
         return (
             cq.Sketch()
             .rect(self.width - 2 * self.outer_pillar_dia, self.breadth - 2 * self.ledge_from_outer)
@@ -158,8 +289,14 @@ class Enclosure:
     # Corner screw bores
     # =====================================================================
     def screw_points(self):
-        dx = self.width / 2 - self.outer_pillar_dia / 2
-        dy = self.breadth / 2 - self.outer_pillar_dia / 2
+        # Sit each post in the rounded corner, tangent to the outer arc: its
+        # centre rides the 45-deg diagonal at (corner_r - post_r) from the arc
+        # centre. When corner_r == post_r this reduces to the old hard-corner
+        # placement; larger radii slide the post inward so it stays buried.
+        pr = self.outer_pillar_dia / 2
+        off = (self.corner_r - pr) / math.sqrt(2)
+        dx = self.width / 2 - self.corner_r + off
+        dy = self.breadth / 2 - self.corner_r + off
         return [(dx, dy), (-dx, dy), (dx, -dy), (-dx, -dy)]
 
     def drill_corners(self, part: cq.Workplane, dia: float, z0: float, z1: float) -> cq.Workplane:
@@ -284,6 +421,24 @@ class Enclosure:
             self._pts = [(0.0, 0.0)]
         return self._pts
 
+    def pcb_fit_problems(self):
+        """Standoff centres that don't fit the base cavity: either outside the
+        inner wall or so close that the pillar would clash with it. Returns the
+        offending (x, y) list (empty == all good). Best-effort; never raises."""
+        try:
+            wire = self.centre_wire().offset2D(-self.ledge / 2, "arc")[0]
+            face = cq.Face.makeFromWires(wire)
+            r = self.pcb_pillar_dia / 2.0
+            bad = []
+            for (x, y) in self.pcb_points():
+                v = cq.Vertex.makeVertex(x, y, 0)
+                inside = face.distance(v) < 1e-6
+                if not inside or wire.distance(v) < r:
+                    bad.append((x, y))
+            return bad
+        except Exception:
+            return []
+
     def _add_standoffs(self, part: cq.Workplane, floor_z: float) -> cq.Workplane:
         """Add fixed-height self-tapper pillars standing on the inner surface."""
         h = self.pcb_pillar_height
@@ -393,10 +548,18 @@ class Enclosure:
     def params_text(self) -> str:
         """Human-readable dump of the inputs and the derived/generated values."""
         pts = self.pcb_points()
-        xs = sorted({round(abs(x), 2) for x, _ in pts if abs(x) > 1e-6})
-        ys = sorted({round(abs(y), 2) for _, y in pts if abs(y) > 1e-6})
-        sx = f"{2 * xs[0]:g}" if xs else "-"
-        sy = f"{2 * ys[0]:g}" if ys else "-"
+        if self.pcb_board:
+            # Asymmetric board patterns: report the hole bounding box instead of
+            # a mirrored spacing, which only makes sense for the auto layout.
+            xs2 = [x for x, _ in pts]
+            ys2 = [y for _, y in pts]
+            sx = f"{max(xs2) - min(xs2):g}"
+            sy = f"{max(ys2) - min(ys2):g}"
+        else:
+            xs = sorted({round(abs(x), 2) for x, _ in pts if abs(x) > 1e-6})
+            ys = sorted({round(abs(y), 2) for _, y in pts if abs(y) > 1e-6})
+            sx = f"{2 * xs[0]:g}" if xs else "-"
+            sy = f"{2 * ys[0]:g}" if ys else "-"
         lines = [
             "Enclosure - parameters",
             "================================",
@@ -409,16 +572,20 @@ class Enclosure:
             f"  pcb_mounts           : {self.pcb_mounts}",
             "",
             "GENERATED",
+            f"  seal style           : {self.seal_style}",
+            f"  outer corner radius  : {self.corner_r:g} mm",
+            f"  seal corner radius   : {self.oring_centre_radius:g} mm",
             f"  corner pillar dia    : {self.outer_pillar_dia:g} mm (base hole {self.outer_pillar_hole:g})",
             f"  lid clearance hole   : {self.outer_pillar_lid_clearance_hole:g} mm",
             f"  o-ring cord          : {self.oring_notional:g} mm @ {self.oring_compression * 100:g}% compression",
             f"  ridge / groove depth : {self.ledge_height:g} / {self.lid_groove_depth:g} mm",
             f"  o-ring centre radius : {self.oring_centre_radius:g} mm",
             f"  o-ring seals needed  : {self.oring_count} x {self.oring_length:g} mm cord",
-            f"  PCB standoffs        : {len(pts)} (M3 self-tap pilot {self.pcb_screw_hole:g}, "
+            f"  PCB board            : {BOARDS[self.pcb_board]['desc'] if self.pcb_board else 'auto layout'}",
+            f"  PCB standoffs        : {len(pts)} (self-tap pilot {self.pcb_screw_hole:g}, "
             f"pillar dia {self.pcb_pillar_dia:g}, height {self.pcb_pillar_height:g})",
             f"  PCB hole spacing     : {sx} x {sy} mm",
-            f"  PCB M3 clearance     : {self.m3_clearance:g} mm",
+            f"  PCB clearance hole   : {self.m3_clearance:g} mm",
         ]
         if self.flange:
             _hr, _sr, _pr, slot_len, _fy, _rx, inc = self._flange_geom()
@@ -481,18 +648,59 @@ def main(argv=None):
     p.add_argument("--breadth", type=float, default=80.0, help="overall Y (mm)")
     p.add_argument("--lid-height", type=float, default=10.0, help="lid Z (mm)")
     p.add_argument("--base-height", type=float, default=30.0, help="base Z (mm)")
+    p.add_argument("--oring-compression", type=float, default=0.20,
+                   help="fraction the o-ring cord is squashed when the lid is closed "
+                        "(e.g. 0.25 = 25%%; typical range 0.15-0.30; default: 0.20)")
+    p.add_argument("--corner-radius", type=float, default=None,
+                   help="outer-wall corner fillet in mm; bigger = more rounded box "
+                        "(default: 10%% of the short side; clamped to a buildable range)")
+    p.add_argument("--seal-style", choices=("round", "cross"), default="round",
+                   help="seal path: 'round' = one clean rounded-rectangle seal with the "
+                        "screw posts tucked in the corner pockets outside it (default); "
+                        "'cross' = legacy path that detours inboard of each post")
+    p.add_argument("--seal-corner-radius", type=float, default=None,
+                   help="seal corner radius in mm (default: automatic per style; "
+                        "clamped to a buildable range)")
     p.add_argument("--flange", action="store_true", help="add the M5 wall-mount flange")
     p.add_argument("--no-pcb-mounts", dest="pcb_mounts", action="store_false",
                    help="omit the PCB standoffs (on by default)")
     p.add_argument("--pcb-pos", type=float, nargs=2, metavar=("X", "Y"),
                    help="standoff distance from centre in mm, e.g. --pcb-pos 30 25; "
                         "mirrors automatically to all four corners")
+    p.add_argument("--board", choices=sorted(BOARDS),
+                   help="place standoffs for a known board (Arduino / Raspberry Pi); "
+                        "sets the hole positions and screw size. See --list-boards.")
+    p.add_argument("--pcb-offset", type=float, nargs=2, metavar=("X", "Y"), default=(0.0, 0.0),
+                   help="shift the --board pattern from centre by (X, Y) mm (default: 0 0)")
+    p.add_argument("--list-boards", action="store_true",
+                   help="list the supported board presets and exit")
     p.add_argument("-o", "--outdir", default=".", help="output directory (default: CWD)")
     a = p.parse_args(argv)
 
-    # Mirror a single position to all four corners if --pcb-pos was supplied
+    if a.list_boards:
+        width = max(len(n) for n in BOARDS)
+        print("Supported boards (use with --board):")
+        for name in sorted(BOARDS):
+            b = BOARDS[name]
+            print(f"  {name:<{width}}  {b['desc']}  "
+                  f"[{len(b['holes'])} holes, pilot {b['screw']:g} mm]")
+        return
+
+    if a.board and a.pcb_pos is not None:
+        p.error("use either --board or --pcb-pos, not both")
+
+    if not 0.0 <= a.oring_compression < 1.0:
+        p.error("--oring-compression must be in [0.0, 1.0)")
+
+    # Resolve the standoff positions: a known board, a mirrored single position,
+    # or None (auto layout).
     custom_points = None
-    if a.pcb_pos is not None:
+    board_screw = board_clearance = None
+    if a.board is not None:
+        custom_points = board_points(a.board, tuple(a.pcb_offset))
+        board_screw = BOARDS[a.board]["screw"]
+        board_clearance = BOARDS[a.board]["clearance"]
+    elif a.pcb_pos is not None:
         px, py = a.pcb_pos
         custom_points = [(px, py), (-px, py), (px, -py), (-px, -py)]
 
@@ -500,14 +708,32 @@ def main(argv=None):
         width=a.width, breadth=a.breadth,
         lid_height=a.lid_height, base_height=a.base_height,
         flange=a.flange, pcb_mounts=a.pcb_mounts,
-        pcb_custom_points=custom_points,
+        pcb_custom_points=custom_points, pcb_board=a.board,
+        oring_compression=a.oring_compression,
+        corner_radius=a.corner_radius, seal_corner_radius=a.seal_corner_radius,
+        seal_style=a.seal_style,
     )
+    if board_screw is not None:
+        enc.pcb_screw_hole = board_screw
+        enc.m3_clearance = board_clearance
+
+    # Warn (but still export) if the chosen standoffs don't fit the cavity.
+    if enc.pcb_mounts and custom_points is not None:
+        bad = enc.pcb_fit_problems()
+        if bad:
+            where = ", ".join(f"({x:g}, {y:g})" for x, y in bad)
+            print(f"WARNING: {len(bad)} standoff(s) do not fit this box: {where}\n"
+                  f"         increase --width/--breadth or use --pcb-offset.")
+
     path = enc.export_zip(a.outdir)
     if enc.flange:
         note = "flange: round + keyhole" if enc.include_round_holes() else "flange: keyhole only"
     else:
         note = "no flange"
-    note += f"; PCB standoffs: {len(enc.pcb_points()) if enc.pcb_mounts else 0}"
+    if enc.pcb_mounts and a.board:
+        note += f"; board: {a.board} ({len(enc.pcb_points())} standoffs)"
+    else:
+        note += f"; PCB standoffs: {len(enc.pcb_points()) if enc.pcb_mounts else 0}"
     print(f"wrote {path}  ({note})")
 
 
