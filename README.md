@@ -39,6 +39,10 @@ Options:
 | `--base-height`  | 30      | base Z (mm)                   |
 | `--flange`       | off     | add the M5 mount flange       |
 | `--no-pcb-mounts`| off     | omit PCB standoffs (on by default) |
+| `--board`        | —       | standoffs for a known board (Arduino / Raspberry Pi) |
+| `--pcb-offset`   | `0 0`   | shift the `--board` pattern from centre (X Y mm) |
+| `--pcb-pos`      | —       | one standoff distance from centre, mirrored to 4 corners |
+| `--list-boards`  | —       | list the supported board presets and exit |
 | `-o/--outdir`    | `.`     | output directory              |
 
 Running with no arguments produces the default box (PCB standoffs on, no flange).
@@ -68,6 +72,40 @@ to **both** the base and lid inner surfaces, sitting on the diagonals
 `pcb_wall_clearance` (4 mm) clear of the inner wall. The count adapts to size:
 **4** on big boxes, dropping to a **diagonal pair**, then a **single central**
 post on the smallest boxes.
+
+### Positioning standoffs for a specific board (`--board`)
+
+To mount an actual Arduino or Raspberry Pi, pass `--board NAME` instead of the
+auto layout. The standoffs are placed at that board's real mounting-hole
+coordinates (the board sits centred in the box) and the pilot / PCB-clearance
+holes are sized for that board's screw (Arduino → M3, Raspberry Pi → M2.5, Pico
+→ M2). List the presets with `--list-boards`:
+
+| name           | board                                   | screw |
+|----------------|-----------------------------------------|-------|
+| `arduino-uno`  | Arduino Uno R3 / Leonardo (68.6×53.3)   | M3    |
+| `arduino-mega` | Arduino Mega 2560 / Due (101.6×53.3)    | M3    |
+| `rpi-b`        | Raspberry Pi B+/2/3/4/5 (85×56)         | M2.5  |
+| `rpi-a`        | Raspberry Pi 3 A+ (65×56)               | M2.5  |
+| `rpi-zero`     | Raspberry Pi Zero / W / 2 W (65×30)     | M2.5  |
+| `rpi-pico`     | Raspberry Pi Pico / Pico W (51×21)      | M2    |
+
+```sh
+# Raspberry Pi 4 in a 100×80 box
+uv run enclosure.py --board rpi-b
+
+# Arduino Uno, nudged 5 mm in +Y to clear a wall feature
+uv run enclosure.py --board arduino-uno --pcb-offset 0 5
+```
+
+If a hole falls outside (or too close to) the cavity wall the generator prints a
+**WARNING** naming the offending standoffs — enlarge the box (`--width` /
+`--breadth`) or shift the pattern with `--pcb-offset`. Custom one-off layouts are
+still available via `--pcb-pos X Y` (one distance mirrored to all four corners).
+
+Add a new board by extending the `BOARDS` table near the top of `enclosure.py`:
+give its outline `size`, the mounting-hole `holes` (measured from the board's
+bottom-left corner), and the `screw` pilot and PCB `clearance` diameters.
 
 ## Box sizes
 
