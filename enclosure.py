@@ -120,14 +120,14 @@ class Enclosure:
     # rounded box; the screw posts slide inward along the diagonal to stay
     # nestled in the corner. Clamped to a safe range by `corner_r`.
     corner_radius: float = None
-    # Seal routing. "round": one clean rounded-rectangle seal; the corner
-    # posts live in the solid pocket OUTSIDE the seal corner arc (drawing
-    # style). "cross": legacy plus/cross path that detours inboard of each
-    # post (the old inward hook).
-    seal_style: str = "round"
-    # Seal corner radius override, in mm. None -> automatic: for "round" the
-    # smallest radius whose corner pocket fits the screw post; for "cross" a
-    # smooth 4.5. Clamped to buildable bounds either way.
+    # Seal routing. "cross" (default): the original plus/cross path that routes
+    # inboard of each corner post -- the seal the box shipped with. "round": one
+    # clean rounded-rectangle seal with the posts in the solid corner pockets
+    # outside it (drawing style, opt-in).
+    seal_style: str = "cross"
+    # Seal corner radius override, in mm. None -> automatic: "cross" uses the
+    # original shoulder-limited fillet; "round" uses the smallest radius whose
+    # corner pocket fits the screw post. Clamped to buildable bounds either way.
     seal_corner_radius: float = None
 
     # ---- M5 wall-mount flange (opt-in) ---------------------------------
@@ -224,9 +224,16 @@ class Enclosure:
                 f"but only {ceil:.1f} fits; use seal_style='cross' or a bigger box")
             r = floor if self.seal_corner_radius is None else self.seal_corner_radius
             return max(floor, min(r, ceil))
-        # cross: OCC builds the plus/cross reliably up to ~5 mm (fails by 6).
-        r = 4.5 if self.seal_corner_radius is None else self.seal_corner_radius
-        return max(0.5, min(r, 5.0))
+        # cross (original): the plus/cross has a convex arm tip a short
+        # "shoulder" from a concave armpit; two equal fillets need 2*r of
+        # straight edge between them, so r <= shoulder/2 (small margin OCC
+        # likes). This is the exact seal the box shipped with.
+        if self.seal_corner_radius is not None:
+            return max(0.5, min(self.seal_corner_radius, 5.0))
+        seal_shoulder = self.outer_pillar_dia - self.ledge_from_outer
+        r = min(4.0, seal_shoulder / 2.0 - 0.1)
+        assert r > 0.0, "shoulder too small for any fillet"
+        return r
 
     # =====================================================================
     # Seal geometry
@@ -654,10 +661,11 @@ def main(argv=None):
     p.add_argument("--corner-radius", type=float, default=None,
                    help="outer-wall corner fillet in mm; bigger = more rounded box "
                         "(default: 10%% of the short side; clamped to a buildable range)")
-    p.add_argument("--seal-style", choices=("round", "cross"), default="round",
-                   help="seal path: 'round' = one clean rounded-rectangle seal with the "
-                        "screw posts tucked in the corner pockets outside it (default); "
-                        "'cross' = legacy path that detours inboard of each post")
+    p.add_argument("--seal-style", choices=("cross", "round"), default="cross",
+                   help="seal path: 'cross' = the original seal that routes inboard of "
+                        "each corner post (default, back to normal); 'round' = one clean "
+                        "rounded-rectangle seal with the posts in the corner pockets "
+                        "outside it")
     p.add_argument("--seal-corner-radius", type=float, default=None,
                    help="seal corner radius in mm (default: automatic per style; "
                         "clamped to a buildable range)")
@@ -672,6 +680,12 @@ def main(argv=None):
                         "sets the hole positions and screw size. See --list-boards.")
     p.add_argument("--pcb-offset", type=float, nargs=2, metavar=("X", "Y"), default=(0.0, 0.0),
                    help="shift the --board pattern from centre by (X, Y) mm (default: 0 0)")
+    p.add_argument("--pcb-hole", type=float, default=None,
+                   help="standoff pilot-hole diameter in mm, for the screws that hold the "
+                        "PCB down (default: 2.5 for M3 self-tappers; --board presets set "
+                        "it per board, e.g. 2.1 for Raspberry Pi M2.5 / 1.7 for Pico M2; "
+                        "this flag overrides either). The standoff pillar grows/shrinks "
+                        "to suit.")
     p.add_argument("--list-boards", action="store_true",
                    help="list the supported board presets and exit")
     p.add_argument("-o", "--outdir", default=".", help="output directory (default: CWD)")
@@ -716,6 +730,10 @@ def main(argv=None):
     if board_screw is not None:
         enc.pcb_screw_hole = board_screw
         enc.m3_clearance = board_clearance
+    if a.pcb_hole is not None:  # explicit size beats the preset
+        if a.pcb_hole <= 0:
+            p.error("--pcb-hole must be positive")
+        enc.pcb_screw_hole = a.pcb_hole
 
     # Warn (but still export) if the chosen standoffs don't fit the cavity.
     if enc.pcb_mounts and custom_points is not None:
