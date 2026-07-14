@@ -44,7 +44,7 @@ Options:
 | `--pcb-pos`      | —       | one standoff distance from centre, mirrored to 4 corners |
 | `--list-boards`  | —       | list the supported board presets and exit |
 | `-o/--outdir`    | `.`     | output directory              |
-
+| `--board`        | N/A     | the places/positioning of the will be changed to fit the pcb 
 Running with no arguments produces the default box (PCB standoffs on, no flange).
 
 The zip always contains: `*_base.step/.stl`, `*_lid.step/.stl`, a PCB outline
