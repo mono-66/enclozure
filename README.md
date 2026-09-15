@@ -3,7 +3,8 @@
 Parametric sealed enclosure generator (CadQuery). A two-part box (base + lid)
 with an o-ring tongue-and-groove seal, corner screw posts for threaded inserts,
 an M5 wall-mount flange, and PCB standoffs with a matching PCB outline (DXF)
-for the top and bottom.
+for the top and bottom. Board presets (Arduino / Raspberry Pi) place the
+standoffs on the real mounting holes and cut connector openings in the walls.
 
 📦 **A selection of pre-built boxes is ready to download in the
 [Releases](https://github.com/morganelectronics/enclozure/releases).**
@@ -42,6 +43,8 @@ Options:
 | `--board`        | —       | standoffs for a known board (Arduino / Raspberry Pi) |
 | `--pcb-offset`   | `0 0`   | shift the `--board` pattern from centre (X Y mm) |
 | `--pcb-pos`      | —       | one standoff distance from centre, mirrored to 4 corners |
+| `--no-connectors`| off     | omit the board's connector openings in the base walls |
+| `--cutout`       | —       | add a custom opening: `SIDE POS WIDTH HEIGHT` (repeatable) |
 | `--list-boards`  | —       | list the supported board presets and exit |
 | `-o/--outdir`    | `.`     | output directory              |
 
@@ -106,6 +109,52 @@ still available via `--pcb-pos X Y` (one distance mirrored to all four corners).
 Add a new board by extending the `BOARDS` table near the top of `enclosure.py`:
 give its outline `size`, the mounting-hole `holes` (measured from the board's
 bottom-left corner), and the `screw` pilot and PCB `clearance` diameters.
+
+### Connector openings
+
+When you pick a `--board`, matching **connector openings are cut into the base
+walls** (USB, HDMI, Ethernet, power, …) so the ports are reachable with the lid
+on. Each opening is a window positioned at the connector's real location, sized
+with a little clearance, sitting above the board's top surface at
+
+```
+PCB top = outer_wall + pcb_pillar_height + pcb_board_thickness   (= 2 + 4 + 1.6 = 7.6 mm)
+```
+
+and rising by the connector's height. Openings are **clamped below the seal rim**
+so they never breach the o-ring groove; if a tall connector (e.g. the Pi's
+stacked USB) won't fit the base height, its window is clipped and a **WARNING**
+is printed — raise `--base-height` for the full opening. Cutouts are in the
+**base only** (that's where the board is mounted), so the board is dropped/tilted
+in with the lid off.
+
+- **`rpi-b`** ships the full **Pi 4 / Pi 5** port layout (USB‑C, 2× micro‑HDMI,
+  A/V jack, Ethernet, 2× USB) taken from the official Pi 4B datasheet. The
+  mounting holes are shared with the B+/2/3, but those older boards have a
+  different port layout — use `--no-connectors` (or `--cutout`) for them.
+- **`arduino-uno` / `arduino-mega`** cut the USB‑B and barrel‑jack openings.
+  These positions are **approximate** — check them against your board and tune
+  in the `BOARDS` table or with `--cutout` if needed.
+
+```sh
+uv run enclosure.py --board rpi-b                    # Pi 4 with all port cutouts
+uv run enclosure.py --board rpi-b --no-connectors    # standoffs only, solid walls
+```
+
+For a board without a preset (or an extra hole — antenna, switch, cable gland),
+add openings directly with `--cutout SIDE POS WIDTH HEIGHT` (repeatable), where
+`SIDE` is `+x`/`-x`/`+y`/`-y`, `POS` is the opening centre along that wall
+measured from the box centre, `WIDTH` is its size along the wall, and `HEIGHT`
+is its rise above the PCB top surface (all mm):
+
+```sh
+# a 20×10 mm opening centred on the +Y wall
+uv run enclosure.py --cutout +y 0 20 10
+```
+
+To give a preset board its own connectors, add a `connectors` list to its
+`BOARDS` entry — each item is `{"side", "pos", "w", "h", "desc"}` with `pos` in
+board coordinates (along that edge) and `h` the height above the PCB.
 
 ## Box sizes
 
