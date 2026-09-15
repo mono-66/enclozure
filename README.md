@@ -21,6 +21,10 @@ With the flange and PCB standoffs enabled (`--flange --pcb-mounts`):
 
 ![Flange and PCB standoffs](docs/img/featured.png)
 
+With the connector holes and standoffs in correct position for raspberry pi-b
+
+![connector holes with raspberry pi-b](image-1.png)
+
 ## Generate the archive
 
 Exports `base` and `lid` (STEP + STL), a `pcb` outline (DXF) and a
