@@ -48,15 +48,28 @@ BOARDS = {
     "arduino-uno": {
         "desc": "Arduino Uno R3 / Leonardo (68.6 x 53.3 mm)",
         "size": (68.58, 53.34),
-        "holes": [(15.24, 2.54), (15.24, 50.8), (66.04, 17.78), (66.04, 45.72)],
+        "holes": [(15.24, 2.54), (15.24, 50.8), (66.04, 7.62), (66.04, 35.56)],
         "screw": 2.5, "clearance": 3.2,
+        # USB-B and barrel jack sit on the left short edge (x=0). Positions are
+        # approximate (verify against your board; tune here or with --cutout).
+        "connectors": [
+            {"side": "-x", "pos": 40.9, "w": 13.0, "h": 11.0, "desc": "USB-B"},
+            {"side": "-x", "pos": 8.9, "w": 9.5, "h": 11.0, "desc": "barrel jack"},
+        ],
     },
     "arduino-mega": {
+        # First four holes are the Uno/shield-compatible pattern, so they match
+        # arduino-uno exactly; the last two are the extra holes on the long end.
         "desc": "Arduino Mega 2560 / Due (101.6 x 53.3 mm)",
         "size": (101.6, 53.34),
-        "holes": [(15.24, 2.54), (15.24, 50.8), (66.04, 17.78), (66.04, 45.72),
+        "holes": [(15.24, 2.54), (15.24, 50.8), (66.04, 7.62), (66.04, 35.56),
                   (90.17, 2.54), (96.52, 50.8)],
         "screw": 2.5, "clearance": 3.2,
+        # Same USB-B + barrel jack on the left short edge as the Uno (approximate).
+        "connectors": [
+            {"side": "-x", "pos": 40.9, "w": 13.0, "h": 11.0, "desc": "USB-B"},
+            {"side": "-x", "pos": 8.9, "w": 9.5, "h": 11.0, "desc": "barrel jack"},
+        ],
     },
     # --- Raspberry Pi (M2.5) ---------------------------------------------
     "rpi-b": {
@@ -64,6 +77,18 @@ BOARDS = {
         "size": (85.0, 56.0),
         "holes": [(3.5, 3.5), (3.5, 52.5), (61.5, 3.5), (61.5, 52.5)],
         "screw": 2.1, "clearance": 2.7,
+        # Connector layout matches the Pi 4 / Pi 5 (per the Pi 4B datasheet
+        # mechanical drawing). The mounting holes are shared with B+/2/3, but
+        # those older boards have a different port layout on these edges.
+        "connectors": [
+            {"side": "-y", "pos": 11.2, "w": 9.0, "h": 3.5, "desc": "USB-C power"},
+            {"side": "-y", "pos": 26.0, "w": 8.0, "h": 6.0, "desc": "micro-HDMI 0"},
+            {"side": "-y", "pos": 39.5, "w": 8.0, "h": 6.0, "desc": "micro-HDMI 1"},
+            {"side": "-y", "pos": 53.5, "w": 7.0, "h": 6.0, "desc": "A/V jack"},
+            {"side": "+x", "pos": 45.75, "w": 16.0, "h": 13.5, "desc": "Ethernet"},
+            {"side": "+x", "pos": 27.0, "w": 15.0, "h": 16.0, "desc": "USB 3.0"},
+            {"side": "+x", "pos": 9.0, "w": 15.0, "h": 16.0, "desc": "USB 2.0"},
+        ],
     },
     "rpi-a": {
         "desc": "Raspberry Pi 3 A+ (65 x 56 mm)",
@@ -120,14 +145,14 @@ class Enclosure:
     # rounded box; the screw posts slide inward along the diagonal to stay
     # nestled in the corner. Clamped to a safe range by `corner_r`.
     corner_radius: float = None
-    # Seal routing. "round": one clean rounded-rectangle seal; the corner
-    # posts live in the solid pocket OUTSIDE the seal corner arc (drawing
-    # style). "cross": legacy plus/cross path that detours inboard of each
-    # post (the old inward hook).
-    seal_style: str = "round"
-    # Seal corner radius override, in mm. None -> automatic: for "round" the
-    # smallest radius whose corner pocket fits the screw post; for "cross" a
-    # smooth 4.5. Clamped to buildable bounds either way.
+    # Seal routing. "cross" (default): the original plus/cross path that routes
+    # inboard of each corner post -- the seal the box shipped with. "round": one
+    # clean rounded-rectangle seal with the posts in the solid corner pockets
+    # outside it (drawing style, opt-in).
+    seal_style: str = "cross"
+    # Seal corner radius override, in mm. None -> automatic: "cross" uses the
+    # original shoulder-limited fillet; "round" uses the smallest radius whose
+    # corner pocket fits the screw post. Clamped to buildable bounds either way.
     seal_corner_radius: float = None
 
     # ---- M5 wall-mount flange (opt-in) ---------------------------------
@@ -151,6 +176,15 @@ class Enclosure:
     # List of (x, y) positions in mm from centre. If set, overrides auto placement.
     pcb_custom_points: list = None
     pcb_board: str = None  # name of a BOARDS preset, for reporting only
+
+    # ---- connector openings in the base walls ---------------------------
+    connectors: bool = True             # cut the selected board's connector openings
+    pcb_board_thickness: float = 1.6    # PCB thickness (sets the connector height datum)
+    pcb_offset: tuple = (0.0, 0.0)      # board shift from centre (matches pcb_points)
+    connector_clearance: float = 0.5    # slack added around every connector opening
+    # Extra openings independent of the board, each (side, pos, width, height) in
+    # ENCLOSURE coords: side in {+x,-x,+y,-y}, pos = centre along that wall.
+    pcb_extra_cutouts: list = None
 
     # ---- misc -----------------------------------------------------------
     assembly_gap: float = 0.0
@@ -224,9 +258,16 @@ class Enclosure:
                 f"but only {ceil:.1f} fits; use seal_style='cross' or a bigger box")
             r = floor if self.seal_corner_radius is None else self.seal_corner_radius
             return max(floor, min(r, ceil))
-        # cross: OCC builds the plus/cross reliably up to ~5 mm (fails by 6).
-        r = 4.5 if self.seal_corner_radius is None else self.seal_corner_radius
-        return max(0.5, min(r, 5.0))
+        # cross (original): the plus/cross has a convex arm tip a short
+        # "shoulder" from a concave armpit; two equal fillets need 2*r of
+        # straight edge between them, so r <= shoulder/2 (small margin OCC
+        # likes). This is the exact seal the box shipped with.
+        if self.seal_corner_radius is not None:
+            return max(0.5, min(self.seal_corner_radius, 5.0))
+        seal_shoulder = self.outer_pillar_dia - self.ledge_from_outer
+        r = min(4.0, seal_shoulder / 2.0 - 0.1)
+        assert r > 0.0, "shoulder too small for any fillet"
+        return r
 
     # =====================================================================
     # Seal geometry
@@ -465,6 +506,73 @@ class Enclosure:
         return sk.clean()
 
     # =====================================================================
+    # Connector openings (base walls)
+    # =====================================================================
+    @property
+    def pcb_top_z(self) -> float:
+        """Z of the PCB top surface: cavity floor + standoff + board thickness.
+        Connector heights are measured up from here."""
+        return self.outer_wall + self.pcb_pillar_height + self.pcb_board_thickness
+
+    def _resolved_connectors(self):
+        """All openings to cut, resolved to enclosure coords: a list of
+        (side, centre, width, height, desc). `centre` is the position along the
+        wall; `height` is the opening's rise above the PCB top surface. Board
+        connectors are mapped from board coords; `pcb_extra_cutouts` are already
+        in enclosure coords."""
+        out = []
+        if self.connectors and self.pcb_board:
+            b = BOARDS.get(self.pcb_board, {})
+            (cx, cy) = (b.get("size", (0.0, 0.0))[0] / 2.0,
+                        b.get("size", (0.0, 0.0))[1] / 2.0)
+            ox, oy = self.pcb_offset
+            for c in b.get("connectors", []):
+                side = c["side"]
+                centre = (c["pos"] - cx + ox) if side in ("+y", "-y") else (c["pos"] - cy + oy)
+                out.append((side, centre, c["w"], c["h"], c.get("desc", "")))
+        for cut in (self.pcb_extra_cutouts or []):
+            side, pos, w, h = cut[0], cut[1], cut[2], cut[3]
+            out.append((side, pos, w, h, "custom"))
+        return out
+
+    def _cut_connectors(self, part: cq.Workplane) -> cq.Workplane:
+        """Cut a rectangular window through the base wall for each connector,
+        sized with clearance and clamped so it never breaks the seal rim."""
+        conns = self._resolved_connectors()
+        if not conns:
+            return part
+        clr = self.connector_clearance
+        z_cap = self.base_height - 0.5          # leave the rim (seal) intact
+        pierce = self.seal_inset + self.oring_notch + 3.0  # depth to clear the wall
+        warned = []
+        for (side, c, w, h, desc) in conns:
+            z0 = max(0.6, self.pcb_top_z - clr)
+            z1_nom = self.pcb_top_z + h + clr
+            z1 = min(z1_nom, z_cap)
+            if z1 <= z0:
+                warned.append(f"{desc or side} (no vertical room, skipped)")
+                continue
+            if z1_nom > z_cap + 1e-6:
+                warned.append(f"{desc or side} (height clipped to fit the box)")
+            half = w / 2.0 + clr
+            if side in ("+y", "-y"):
+                x0, dx = c - half, w + 2 * clr
+                y0 = (-self.breadth / 2 - 1.0) if side == "-y" else (self.breadth / 2 - pierce)
+                box = cq.Solid.makeBox(dx, pierce + 1.0, z1 - z0, cq.Vector(x0, y0, z0))
+            elif side in ("+x", "-x"):
+                y0, dy = c - half, w + 2 * clr
+                x0 = (-self.width / 2 - 1.0) if side == "-x" else (self.width / 2 - pierce)
+                box = cq.Solid.makeBox(pierce + 1.0, dy, z1 - z0, cq.Vector(x0, y0, z0))
+            else:
+                warned.append(f"{desc or side} (unknown side '{side}', skipped)")
+                continue
+            part = part.cut(cq.Workplane(obj=box))
+        if warned:
+            print("WARNING: connector openings adjusted: " + "; ".join(warned)
+                  + "\n         raise --base-height for full-height connector cutouts.")
+        return part
+
+    # =====================================================================
     # Parts
     # =====================================================================
     def make_base(self) -> cq.Workplane:
@@ -496,6 +604,8 @@ class Enclosure:
 
         if self.flange:
             base = self.cut_flange_holes(base)
+
+        base = self._cut_connectors(base)
         return base
 
     def make_lid(self) -> cq.Workplane:
@@ -587,6 +697,14 @@ class Enclosure:
             f"  PCB hole spacing     : {sx} x {sy} mm",
             f"  PCB clearance hole   : {self.m3_clearance:g} mm",
         ]
+        conns = self._resolved_connectors()
+        if conns:
+            names = ", ".join(d or s for (s, _c, _w, _h, d) in conns)
+            lines += [
+                f"  connector openings   : {len(conns)} in base walls ({names})",
+                f"  PCB top surface      : {self.pcb_top_z:g} mm above the base floor "
+                f"(standoff {self.pcb_pillar_height:g} + board {self.pcb_board_thickness:g})",
+            ]
         if self.flange:
             _hr, _sr, _pr, slot_len, _fy, _rx, inc = self._flange_geom()
             lines += [
@@ -654,10 +772,11 @@ def main(argv=None):
     p.add_argument("--corner-radius", type=float, default=None,
                    help="outer-wall corner fillet in mm; bigger = more rounded box "
                         "(default: 10%% of the short side; clamped to a buildable range)")
-    p.add_argument("--seal-style", choices=("round", "cross"), default="round",
-                   help="seal path: 'round' = one clean rounded-rectangle seal with the "
-                        "screw posts tucked in the corner pockets outside it (default); "
-                        "'cross' = legacy path that detours inboard of each post")
+    p.add_argument("--seal-style", choices=("cross", "round"), default="cross",
+                   help="seal path: 'cross' = the original seal that routes inboard of "
+                        "each corner post (default, back to normal); 'round' = one clean "
+                        "rounded-rectangle seal with the posts in the corner pockets "
+                        "outside it")
     p.add_argument("--seal-corner-radius", type=float, default=None,
                    help="seal corner radius in mm (default: automatic per style; "
                         "clamped to a buildable range)")
@@ -672,6 +791,21 @@ def main(argv=None):
                         "sets the hole positions and screw size. See --list-boards.")
     p.add_argument("--pcb-offset", type=float, nargs=2, metavar=("X", "Y"), default=(0.0, 0.0),
                    help="shift the --board pattern from centre by (X, Y) mm (default: 0 0)")
+    p.add_argument("--pcb-hole", type=float, default=None,
+                   help="standoff pilot-hole diameter in mm, for the screws that hold the "
+                        "PCB down (default: 2.5 for M3 self-tappers; --board presets set "
+                        "it per board, e.g. 2.1 for Raspberry Pi M2.5 / 1.7 for Pico M2; "
+                        "this flag overrides either). The standoff pillar grows/shrinks "
+                        "to suit.")
+    p.add_argument("--no-connectors", dest="connectors", action="store_false",
+                   help="omit the board's connector openings in the base walls "
+                        "(cut by default when --board is set)")
+    p.add_argument("--cutout", action="append", nargs=4, default=[],
+                   metavar=("SIDE", "POS", "WIDTH", "HEIGHT"),
+                   help="extra rectangular opening in a base wall. SIDE is one of "
+                        "+x/-x/+y/-y; POS is the centre along that wall from the box "
+                        "centre (mm); WIDTH is the opening size along the wall; HEIGHT "
+                        "is its rise above the PCB top. Repeatable.")
     p.add_argument("--list-boards", action="store_true",
                    help="list the supported board presets and exit")
     p.add_argument("-o", "--outdir", default=".", help="output directory (default: CWD)")
@@ -682,12 +816,25 @@ def main(argv=None):
         print("Supported boards (use with --board):")
         for name in sorted(BOARDS):
             b = BOARDS[name]
+            nconn = len(b.get("connectors", []))
+            conn = f", {nconn} connector cutouts" if nconn else ""
             print(f"  {name:<{width}}  {b['desc']}  "
-                  f"[{len(b['holes'])} holes, pilot {b['screw']:g} mm]")
+                  f"[{len(b['holes'])} holes, pilot {b['screw']:g} mm{conn}]")
         return
 
     if a.board and a.pcb_pos is not None:
         p.error("use either --board or --pcb-pos, not both")
+
+    # Parse any --cutout requests: (side, pos, width, height) in enclosure coords.
+    sides = ("+x", "-x", "+y", "-y")
+    extra_cutouts = []
+    for (side, pos, w, h) in a.cutout:
+        if side not in sides:
+            p.error(f"--cutout SIDE must be one of {', '.join(sides)} (got '{side}')")
+        try:
+            extra_cutouts.append((side, float(pos), float(w), float(h)))
+        except ValueError:
+            p.error("--cutout POS/WIDTH/HEIGHT must be numbers")
 
     if not 0.0 <= a.oring_compression < 1.0:
         p.error("--oring-compression must be in [0.0, 1.0)")
@@ -712,10 +859,16 @@ def main(argv=None):
         oring_compression=a.oring_compression,
         corner_radius=a.corner_radius, seal_corner_radius=a.seal_corner_radius,
         seal_style=a.seal_style,
+        connectors=a.connectors, pcb_offset=tuple(a.pcb_offset),
+        pcb_extra_cutouts=extra_cutouts,
     )
     if board_screw is not None:
         enc.pcb_screw_hole = board_screw
         enc.m3_clearance = board_clearance
+    if a.pcb_hole is not None:  # explicit size beats the preset
+        if a.pcb_hole <= 0:
+            p.error("--pcb-hole must be positive")
+        enc.pcb_screw_hole = a.pcb_hole
 
     # Warn (but still export) if the chosen standoffs don't fit the cavity.
     if enc.pcb_mounts and custom_points is not None:
@@ -734,6 +887,9 @@ def main(argv=None):
         note += f"; board: {a.board} ({len(enc.pcb_points())} standoffs)"
     else:
         note += f"; PCB standoffs: {len(enc.pcb_points()) if enc.pcb_mounts else 0}"
+    nconn = len(enc._resolved_connectors())
+    if nconn:
+        note += f"; {nconn} connector cutouts"
     print(f"wrote {path}  ({note})")
 
 
