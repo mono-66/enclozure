@@ -132,9 +132,9 @@ class Enclosure:
     # ---- shell / seal ---------------------------------------------------
     outer_wall: float = 2.0
     oring_notional: float = 2.0    # o-ring cord (cross-section) diameter
-    oring_compression: float = 0.20  # fraction the o-ring is squashed when closed
+    oring_compression: float = 0.4  # fraction the o-ring is squashed when closed
     ledge: float = 1.2             # ridge (tongue) width
-    ledge_height: float = 0.6      # ridge height (left fixed; groove depth follows compression)
+    ledge_height: float = 1.0      # ridge height (left fixed; groove depth follows compression)
 
     # ---- corner screw posts --------------------------------------------
     outer_pillar_hole: float = 4.4              # threaded-insert hole (base)

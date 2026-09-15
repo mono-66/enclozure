@@ -47,6 +47,11 @@ Options:
 | `--cutout`       | —       | add a custom opening: `SIDE POS WIDTH HEIGHT` (repeatable) |
 | `--list-boards`  | —       | list the supported board presets and exit |
 | `-o/--outdir`    | `.`     | output directory              |
+| `--pcb-hole`     | 2.5 (or boards preset value) | will change the diameter of the hole for the pcb mounting stand offs in the enclosure |
+| `--oring-compression` | 0.20 | this changes how much the oring in the seal will be compressed by from a minimum of 0.0 to a maximum of 1.0 | 
+| `--seal-style` | cross | by changing this to either cross or round then the corners of the sealing |
+| `--seal-corner-radius` | auto per style, clamped | changes the radius of the corner for the seal |
+| `--corner-radius` | auto (10% of the short side) | outside corner radius |
 
 Running with no arguments produces the default box (PCB standoffs on, no flange).
 
